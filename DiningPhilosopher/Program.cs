@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,82 +12,107 @@ namespace DiningPhilosopher
         private static int _maxThinkingTime;
         private static int _numberOfPhilosophers;
         private static int _maxEatingTime;
-        private static CancellationTokenSource _source;
-        private static CancellationToken _cancellationToken;
+
         public static object[] Forks { get; set; }
 
         private static void Main(string[] args)
         {
             if (args.Length != 3)
+            {
                 Console.WriteLine("Invalid number of Arguments");
+            }
 
             _numberOfPhilosophers = Convert.ToInt32(args[0]);
             _maxThinkingTime = Convert.ToInt32(args[1]);
             _maxEatingTime = Convert.ToInt32(args[2]);
 
-            Forks = Enumerable.Repeat(new object(),  _numberOfPhilosophers).ToArray();
+            Forks = new object[_numberOfPhilosophers];
+            for (int i = 0; i < _numberOfPhilosophers; i++)
+                Forks[i] = new object();
 
-            _source = new CancellationTokenSource();
-            _cancellationToken = _source.Token;
+            var source = new CancellationTokenSource();
+            var cancellationToken = source.Token;
 
-            var tasks = new List<Thread>();
-            var factory = new TaskFactory(_cancellationToken);
+            var threads = new List<Thread>();
 
             for (var taskCtr = 0; taskCtr < _numberOfPhilosophers; taskCtr++)
             {
                 var ctr = taskCtr;
-                var thread = new Thread(() => Eat(ctr));
+                var thread = new Thread(() => Eat(ctr, cancellationToken, true));
                 thread.Start();
-                tasks.Add(thread);
+                threads.Add(thread);
             }
 
             Console.ReadKey();
-            _source.Cancel();
+            source.Cancel();
 
             try
             {
-                foreach (var thread in tasks) thread.Join();
+                foreach (var thread in threads) thread.Join();
             }
-            catch (AggregateException e)
+            catch (Exception e)
             {
-                foreach (var v in e.InnerExceptions)
-                    Console.WriteLine(e.Message + " " + v.Message);
+                Console.WriteLine(e.Message);
             }
             finally
             {
-                _source.Dispose();
+                source.Dispose();
             }
 
             Console.ReadKey();
         }
 
-        private static void Eat(int id)
+        private static void Eat(int id, CancellationToken cancelToken, bool removeCircularWait = false)
         {
             var random = new Random();
-            var secondForkIndex = (id + 1) % _numberOfPhilosophers;
 
+            var leftFork = id;
+            var rightFork = (id + 1) % _numberOfPhilosophers;
+
+            var firstFork = leftFork;
+            var secondFork = rightFork;
+
+            if (removeCircularWait && id % 2 != 0)
+            {
+                firstFork = rightFork;
+                secondFork = leftFork;
+            }
+
+            var forkWatch = new Stopwatch();
+            var overallRuntimeWatch = new Stopwatch();
+
+            overallRuntimeWatch.Start();
             while (true)
             {
                 Thread.Sleep(random.Next(0, _maxThinkingTime));
                 Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} finished thinking");
 
-                lock (Forks[id])
+                forkWatch.Start();
+                lock (Forks[firstFork])
                 {
-                    Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} took first fork: {id}");
-                    lock (Forks[secondForkIndex])
+                    forkWatch.Stop();
+                    Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} took first fork: {firstFork}");
+
+                    //Thread.Sleep(1000); //Sleep Here for instant Deadlock in circular wait
+
+                    forkWatch.Start();
+                    lock (Forks[secondFork])
                     {
-                        Console.WriteLine(
-                            $"{DateTime.Now:hh:mm:ss.fff}: phil {id} took second fork: {secondForkIndex}");
+                        forkWatch.Stop();
+                        Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} took second fork: {secondFork}");
 
                         Thread.Sleep(random.Next(0, _maxEatingTime));
-                        Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} is done eating");
                     }
                 }
+                Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} is done eating");
 
-                if (_cancellationToken.IsCancellationRequested)
+                if (cancelToken.IsCancellationRequested)
                     break;
             }
+            overallRuntimeWatch.Stop();
 
+            Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} ran for {overallRuntimeWatch.Elapsed}");
+            Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} waited {forkWatch.Elapsed} for forks");
             Console.WriteLine($"{DateTime.Now:hh:mm:ss.fff}: phil {id} is dead");
         }
     }
